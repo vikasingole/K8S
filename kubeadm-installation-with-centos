@@ -1,0 +1,243 @@
+===> What is Kubeadm?
+     Kubeadm is a tool to set up a minimum viable Kubernetes cluster without much complex configuration. Also,
+     Kubeadm makes the whole process easy by running a series of prechecks to ensure that the server has all 
+     the essential components and configs to run Kubernetes.
+
+    It is developed and maintained by the official Kubernetes community. There are other options like minikube,
+    kind, etc., that are pretty easy to set up. You can check out my minikube tutorial. Those are good options
+    with minimum hardware requirements if you are deploying and testing applications on Kubernetes.
+
+    But if you want to play around with the cluster components or test utilities that are part of cluster administration,
+    Kubeadm is the best option. Also, you can create a production-like cluster locally on a workstation for development 
+    and testing purposes.
+
+===> Kubeadm Setup Prerequisites
+     Minimum two Ubuntu nodes [One master and one worker node]. You can have more worker nodes as per your requirement.
+     The master node should have a minimum of 2 vCPU and 2GB RAM.
+     For the worker nodes, a minimum of 1vCPU and 2 GB RAM is recommended.
+     10.X.X.X/X network range with static IPs for master and worker nodes. We will be using the 192.x.x.x series as the pod network range that
+     will be used by the Calico network plugin. Make sure the Node IP range and pod IP range don’t overlap.
+
+Note ---> If you are setting up the cluster in the corporate network behind a proxy, ensure set the proxy variables and
+          have access to gcr container registry and docker hub. or talk to your network administrator to whitelist k8s.gcr.io to pull the required images.
+
+
+
+STEP-0 ===> first set hostname on all nodes
+            hostnamectl set-hostname master
+            bash
+            hostnamectl set-hostname node1 
+            bash
+            hostnamectl set-hostname node2
+            bash
+
+
+===> Configure K8S Nodes (all three nodes) <===
+
+These are linux configuration
+
+# Disable Swap Memory ===>
+
+shell ===> swapoff -a <--- temporary
+shell ===> sed -i '/ swap / s/^\(.*\)$/#\1/g' /etc/fstab  <--- permanent
+shell ===> or we can commenting swap lines in /etc/fstab  <--- permanent
+
+# Configure Linux Modules 
+
+cat <<EOF | sudo tee /etc/modules-load.d/k8s.conf
+overlay
+br_netfilter
+EOF
+
+sudo modprobe overlay
+sudo modprobe br_netfilter
+
+# sysctl parameter required by setup, parameter persist across reboots---
+
+cat <<EOF | sudo tee /etc/sysctl.d/k8s.conf
+net.bridge.bridge-nf-call-iptables  = 1
+net.bridge.bridge-nf-call-ip6tables = 1
+net.ipv4.ip_forward                 = 1
+EOF
+
+# apply sysctl parameter without reboot
+
+sudo sysctl --system
+
+##### Install Container Runtime (CRI) #####
+## we have to install CRI, RUNC and CNI
+## installing containerd with package manager will include CRI and RUNC
+## we have to install CNI seperatively
+
+# add docker repo
+
+sudo yum-config-manager \
+    --add-repo \
+    https://download.docker.com/linux/centos/docker-ce.repo
+
+# install containerd
+yum install containerd.io -y
+
+# enable CRI from containerd configuration file
+# comment 'disabled_plugins = ["cri"]' this configuration 
+vim /etc/containerd/config.toml
+# sed -i s/'disabled_plugins = ["cri"]'/ # 'disabled_plugins = ["cri"]'/ /etc/containerd/config.toml
+
+# start stop containerd
+
+systemctl start containerd
+systemctl enable containerd
+
+# install CNI plugins
+
+yum install wget -y
+wget https://github.com/containernetworking/plugins/releases/download/v1.2.0/cni-plugins-linux-amd64-v1.2.0.tgz
+mkdir -p /opt/cni/bin
+tar -xzvf cni-plugins-linux-amd64-v1.2.0.tgz -C /opt/cni/bin
+rm -rvf cni-plugins-linux-amd64-v1.2.0.tgz
+# install kubeadm, kubelet and kubectl
+# add kubernetes repo
+
+cat <<EOF | sudo tee /etc/yum.repos.d/kubernetes.repo
+[kubernetes]
+name=Kubernetes
+baseurl=https://packages.cloud.google.com/yum/repos/kubernetes-el7-\$basearch 
+enabled=1
+gpgcheck=1
+gpgkey=https://packages.cloud.google.com/yum/doc/rpm-package-key.gpg
+exclude=kubelet kubeadm kubectl
+EOF
+
+yum clean all
+yum repolist
+
+# disable SELinux Policy (or permissive)
+
+setenforce 0  <--- permissive
+vim /etc/selinux/config  <--- permanent disable
+
+# install kubeadm, kubelet and kubectl
+
+yum install -y kubeadm kubelet kubectl --disableexcludes=kubernetes
+
+# start kubelet
+# kubelet will restart contineously until kubeadm initialized
+
+systemctl start kubelet
+systemctl enable kubelet
+
+# initialized control-plane
+
+kubeadm init --pod-network-cidr "10.244.0.0/16"      (do not work 10.10.0.0 kube flannel and core dns pods not working) 
+
+# work with kubectl
+# create kubeconfig file 
+# admin kubeconfig file is available in /etc/kubernetes/admin.conf
+
+mkdir -p $HOME/.kube
+sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+sudo chown $(id -u):$(id -g) $HOME/.kube/config
+
+# after succesfully installed control-plan, o/p like as
+
+To start using your cluster, you need to run the following as a regular user:
+
+  mkdir -p $HOME/.kube
+  sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+  sudo chown $(id -u):$(id -g) $HOME/.kube/config
+
+Alternatively, if you are the root user, you can run:
+
+  export KUBECONFIG=/etc/kubernetes/admin.conf
+
+You should now deploy a pod network to the cluster.
+
+we can install any CNI plugin, We will install weavenet 
+
+kubectl apply -f https://github.com/weaveworks/weave/releases/download/v2.8.1/weave-daemonset-k8s.yaml
+
+for pod network we have to install plugins
+
+note ===> koi b plugin use kar sakte hai
+ 
+
+kubeadm join 192.168.0.10:6443 --token j42g0w.9lz0683hdqr62woj \
+	--discovery-token-ca-cert-hash sha256:8b7935a998182c0b290ff756df07f7679db9df802280da567b256483d937d4fb
+   
+
+kubectl apply -f https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml<--- flannel
+
+
+
+================================================================================================================================================================================================================================================================================
+
+these ports are required ===>
+
+Ports and Protocols
+
+When running Kubernetes in an environment with strict network boundaries, such as on-premises datacenter with physical network firewalls or Virtual Networks in Public Cloud, it is useful to be aware of the ports and protocols used by Kubernetes components.
+Control plane
+Protocol	Direction     Port Range	Purpose	Used By
+TCP	        Inbound	      6443	        Kubernetes API server	All
+TCP	        Inbound	      2379-2380	        etcd server client API	kube-apiserver, etcd
+TCP	        Inbound	      10250	        Kubelet API	Self, Control plane
+TCP	        Inbound	      10259	        kube-scheduler	Self
+TCP	        Inbound	      10257	        kube-controller-manager	Self
+
+Although etcd ports are included in control plane section, you can also host your own etcd cluster externally or on custom ports.
+Worker node(s)
+Protocol	Direction	Port Range	Purpose	Used By
+TCP	Inbound	10250	Kubelet API	Self, Control plane
+TCP	Inbound	30000-32767	NodePort Services†	All
+
+† Default port range for NodePort Services.
+
+All default port numbers can be overridden. When custom ports are used those ports need to be open instead of defaults mentioned here.
+
+One common example is API server port that is sometimes switched to 443. Alternatively, the default port is kept as is and API server is put behind a load balancer that listens on 443 and routes the requests to API server on the default port.
+
+=====================================================================================================
+
+we have to specify ipaddress and host name in the /etc/hosts
+for master
+===> vim /etc/hosts
+    192.168.0.10 master
+for worker
+===> vim /etc/hosts
+    192.168.0.11 worker-1
+===> vim /etc/hosts
+    192.168.0.12 worker-
+
+=====================================================================================================
+
+errors===>
+
+1) this error will occur while join worker node to master node
+   
+
+
+2) this error will occur while join worker node to master node
+
+[preflight] Running pre-flight checks
+error execution phase preflight: [preflight] Some fatal errors occurred:
+	[ERROR Port-10250]: Port 10250 is in use
+solve===> systemctl stop kubelet
+          systemctl stop kubelet
+
+3) we have restart containerd so that master node will be ready and core dns pod will create pod container otherwise that will be in pending state
+
+4) token generate command
+
+kubeadm token create --print-join-command
+
+
+5) calilo plugins with pod network
+
+sudo kubeadm init  --apiserver-advertise-address=172.16.28.10 --pod-network-cidr=192.168.0.0/16
+
+kubectl apply -f https://docs.projectcalico.org/v3.8/manifests/calico.yaml
+
+6) to resolv nameserver
+
+vim /etc/resolv.conf
+nameserver 8.8.8.8
