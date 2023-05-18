@@ -1,0 +1,355 @@
+Resource Quota by Gaurav Sharma ===>
+
+
+vim pod.yml
+
+apiVersion: v1
+kind: Pod
+metadata:
+ name: my-pod-1
+spec:
+ containers:
+  - name: nginx
+    image: nginx
+    resources:
+     requests:
+      memory: 250Mi
+      cpu: 0.1
+
+===> kubectl apply -f pod.yml
+===> kubectl get pods
+===> kubectl get pods -o wide
+===> kubectl describe pod my-pod
+
+
+now this pod will be create on any of the worker-node get resouces as i mentioned above from the hardware of worker-node but i did not set limit here 
+but the pod will creating in default namespace. i am not metioning any namespace here 
+
+suppose this pod has created on worker node-1 now let us checkout memory and cpu utilization of pod---> container 
+
+===> docker ps 
+===> docker container stats container-id
+     
+here, we can see container is using 250Mb out of all limit memory in worker-node-1 which is actual available memory of worker machine
+
+but now we will set limit to conatiner
+
+vim pod.yml
+
+apiVersion: v1
+kind: Pod
+metadata:
+ name: my-pod-2
+spec:
+ containers:
+  - name: nginx
+    image: nginx
+    resources:
+     requests:
+      memory: 250Mi
+      cpu: 0.1
+     limits:
+      memory: 500Mi
+      cpu: 0.5
+
+===> kubectl apply -f pod.yml
+===> kubectl get pods
+===> kubectl get pod -o wide
+===> kubectl describe pod my-pod-2
+
+suppose this pod has created on worker node-1 again now let us checkout memory and cpu utilization of pod---> container 
+
+===> docker ps 
+===> docker container stats container-id
+     
+here, we can see container is using 250Mb out of 500mb limit memory in worker-node-1 which is not actual available memory
+of worker machine but limit memory is taking from hardware memory
+
+so all these things we will doing with the specific namespace 
+
+==========================================================================================================================
+
+For Object Base ===>
+
+vim ns.yml
+
+apiVersion: v1
+kind: Namespace
+metadata:
+ name: vicky
+
+===> kubectl apply -f ns.yml
+===> kubectl get ns
+
+vim resourcequota.yml
+
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+ name: myquota
+spec:
+ hard:
+  pods: 2
+
+===> kubectl apply -f resourcequota.yml -n vicky
+===> kubectl get resourcequota -n vicky  
+===> kubectl describe resourcequota myquota -n vicky
+
+vim deploy.yml
+
+kind: Deployment
+apiVersion: apps/v1
+metadata:
+ name: my-deploy
+spec:
+ replicas: 2
+ selector:      
+  matchLabels:
+   name: deployment
+ template:
+  metadata:
+   name: my-pod
+   labels:
+    name: deployment
+  spec:
+   containers:
+    - name: nginx
+      image: nginx
+
+===> kubectl apply -f deploy.yml -n vicky
+===> kubectl describe resoucequota myquota -n vicky
+
+deleted all parameter
+
+kubectl delete -f deploy.yml -n vicky
+kubectl delete -f resourcequota.yml -n vicky
+kubectl delete -f ns.yml -n vicky
+
+
+For Compute Base ===>
+
+vim ns.yml
+
+apiVersion: v1
+kind: Namespace
+metadata:
+ name: vicky
+
+===> kubectl apply -f ns.yml
+===> kubectl get ns
+
+vim resourcequota.yml
+
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+ name: myquota
+spec:
+ hard:
+  pods: 2                              # object base and compute base quota in a same file
+  requests.memory: 500Mi
+  requests.cpu: 0.5
+  limits.memory: 1Gi
+  limits.cpu: 1
+
+kubectl apply -f resourcequota.yml -n vicky
+kubectl get resourcequota -n vicky
+kubectl describe ns vicky
+
+vim pod.yml
+
+apiVersion: v1
+kind: Pod
+metadata:
+ name: my-pod-1
+spec:
+ containers:
+  - name: nginx
+    image: nginx
+    resources:
+     requests:
+      memory: 250Mi
+      cpu: 0.1
+     limits:
+      memory: 500Mi
+      cpu: 0.5
+
+kubectl apply -f pod.yml -n vicky
+kubectl get pods -n vicky
+kubectl describe ns vicky
+
+deleted all parameter
+
+kubectl delete -f pod.yml -n vicky
+kubectl delete -f resourcequota.yml -n vicky
+kubectl delete -f ns.yml
+
+
+We can mention object base and compute base quota in a same file ===> 
+
+vim resourcequota.yml
+
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+ name: myquota
+spec:
+ hard:
+  pods: 4
+  requests.cpu: 0.5
+  requests.memory: 500Mi
+  limits.cpu: 1
+  limits.memory: 1Gi
+
+Limit Ranges ===>
+
+vim limit.yml
+
+apiVersion: v1
+kind: LimitRange
+metadata:
+ name: limit
+spec:
+ limits:
+  - default:
+     cpu: 200m
+     memory: 500m
+    defaultRequest:
+     cpu: 100m
+     memory: 250m
+    type: Container
+
+now set min and max default limit
+
+vim limit.yml
+
+apiVersion: v1
+kind: LimitRange
+metadata:
+ name: limit
+spec:
+ limits:
+  - default:
+     memory: 500Mi
+     cpu: 200m
+    defaultRequest:
+     memory: 250Mi
+     cpu: 100m
+    min:                         # depends on defaultRequest
+     memory: 125Mi
+     cpu: 50m
+    max:                         # depends on default
+     memory: 1Gi
+     cpu: 400m
+    type: Container   
+  
+===> kubectl apply -f limit.yml -n vicky
+===> kubectl describe limits limit
+===> kubectl get ns
+===> kubectl describe ns vicky
+
+now we will create pod
+
+vim pod.yml
+
+apiVersion: v1
+kind: Pod
+metadata:
+ name: my-pod-2
+spec:
+ containers:
+  - name: nginx
+    image: nginx
+    resources:
+     requests:
+      memory: 100Mi
+      cpu: 50m
+     limits:
+      memory: 250Mi
+      cpu: 100m
+
+so in this case pod will not create because memory request is less than the min request i.e 100Mi 
+therefore we have to give greater than min request i.e greater than 125Mi then checkout
+
+vim pod.yml
+
+apiVersion: v1
+kind: Pod
+metadata:
+ name: my-pod-2
+spec:
+ containers:
+  - name: nginx
+    image: nginx
+    resources:
+     requests:
+      memory: 130Mi
+      cpu: 50m
+     limits:
+      memory: 100Mi
+      cpu: 100m
+
+now pod will create
+
+===> kubectl apply -f pod.yml -n vicky
+===> kubectl get pods
+===> kubectl describe pod my-pod-2
+===> kubectl describe ns vicky
+
+Max Limit/Request Ratio
+
+vim limit.yml
+
+apiVersion: v1
+kind: LimitRange
+metadata:
+ name: limit
+ namespace: vicky
+spec:
+ limits:
+  - maxLimitRequestRatio:
+     memory: 2   
+    type: Container
+
+===> kubectl apply -f limit.yml    # coz we mentioned our namespace
+===> kubectl get limits -n vicky 
+===> kubectl describe limits limit -n vicky
+
+now create pod
+
+apiVersion: v1
+kind: Pod
+metadata:
+ name: my-pod-2
+spec:
+ containers:
+  - name: nginx
+    image: nginx
+    resources:
+     requests:
+      memory: 500Mi
+     limits:
+      memory: 1000Mi
+
+===> kubectl apply -f pod.yml -n vicky
+===> kubectl get pods -n vicky
+
+now if we apply then pod will create coz limit/request ratio should be below than 2 in above condition    
+
+apiVersion: v1
+kind: Pod
+metadata:
+ name: my-pod-2
+spec:
+ containers:
+  - name: nginx
+    image: nginx
+    resources:
+     requests:
+      memory: 400Mi
+     limits:
+      memory: 1000Mi
+
+this case pod will not create because the ratio will be greater than 2.., here
+
+this error will throw ===> Error from server (Forbidden): error when creating "pod.yml": pods "my-pod-4" is forbidden: memory max limit to request ratio per Container is 2, but provided ratio is 2.500000
